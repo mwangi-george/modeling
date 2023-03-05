@@ -1,0 +1,107 @@
+---
+title: "Big Data Analysis With Spark"
+author: "George Mwangi"
+date: "2023-03-05"
+output: github_document
+---
+
+```{r}
+# load libraries
+pacman::p_load(tidyverse, sparklyr)
+
+# create a spark connection
+sp_conn <- spark_connect(master = "local")
+
+# checking the tables in spark
+src_tbls(sp_conn)
+
+# writing a csv into spark
+spark_read_csv(sp_conn, name = "previous_application", path = "data/previous_application.csv")
+
+spark_read_csv(sp_conn, name = "application_data", path = "data/application_data.csv")
+
+# linking to a DataFrame stored in Spark
+application_df <- tbl(sp_conn, "application_data")
+
+# use the dataframe to do normal R operations (strictly using dplyr syntax)
+application_df %>% glimpse()
+
+
+application_df %>% 
+  select(ends_with("MODE")) %>% 
+  mutate_if(is.character, str_to_title) %>% 
+  select_if(is.numeric) %>% 
+  as_tibble() %>% 
+  cor(use = "pairwise.complete.obs")
+
+application_df %>%
+ #janitor::clean_names() %>% 
+  count(TARGET)
+
+
+# collecting data from spark
+results <- application_df %>% 
+  select(starts_with("NAME")) %>% 
+  count(NAME_CONTRACT_TYPE, NAME_TYPE_SUITE, sort = T) %>% 
+  # restrict results to first 5 rows
+  head()  # same as base
+
+class(results)
+
+collected_df <- results %>% collect()
+
+class(collected_df)
+# copy_to() moves your data from R to Spark; collect() goes in the opposite direction.
+
+
+collected_df %>% 
+  janitor::clean_names() %>% 
+  ggplot(aes(name_type_suite, n))+geom_col()+facet_wrap(~name_contract_type)+theme_bw()+coord_flip()
+
+
+# storing intermediate results
+application_df %>% 
+  filter(AMT_INCOME_TOTAL < 150000) %>% 
+  compute("income_less150k")
+
+src_tbls(sp_conn)
+
+income_df <- tbl(sp_conn, "income_less150k")
+
+# group statistics
+income_df %>% 
+  group_by(CODE_GENDER) %>% 
+  summarise(mean_amt_credit = mean(AMT_CREDIT, na.rm = T)) %>% 
+  collect() %>% 
+  ggplot(aes(fct_reorder(CODE_GENDER, mean_amt_credit), mean_amt_credit, fill = CODE_GENDER))+
+  geom_col(show.legend = F)+
+  coord_flip()
+
+
+# SQl with Spark
+library(DBI)
+
+# QUERYING RETURNS DATAFRAMES
+dbGetQuery(
+  sp_conn, statement = "SELECT SK_ID_CURR, TARGET, NAME_CONTRACT_TYPE
+                        FROM income_less150k WHERE CODE_GENDER ='M' AND FLAG_OWN_CAR = 'Y'")
+
+# INTERGRATE dbcooper 
+library(dbcooper)
+
+# initialize database functions
+dbc_init(sp_conn, con_id = "app")
+
+# handle database tables as normal R objects
+app_application_data() %>% 
+  filter(TARGET == 1) %>% 
+  group_by(CODE_GENDER) %>% 
+  summarise(mean_amt_credit = mean(AMT_CREDIT, na.rm = T))
+
+# perform  all kind of joins
+# joined_df <- left_join(first_tbl, second_tbl, by = "id")
+
+# disconnect from spark     
+spark_disconnect(sp_conn)
+```
+
